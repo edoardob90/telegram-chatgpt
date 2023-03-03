@@ -1,0 +1,6 @@
+/.verify.json
+/.env
+
+*.pickle
+
+.idea
