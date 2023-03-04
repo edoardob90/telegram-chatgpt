@@ -9,8 +9,8 @@ from html import escape
 from uuid import uuid4
 import json
 from random import choice
-from typing import Callable, Dict
-from functools import wraps
+from typing import Callable, Dict, Set, Union
+from functools import wraps, partial
 
 from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
 from telegram.constants import ParseMode
@@ -35,20 +35,31 @@ logger = logging.getLogger(__name__)
 AUTHORIZE, VERIFY = range(2)
 
 # Config
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", None)
-OPENAI_API = os.environ.get("OPENAI_API", None)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+OPENAI_API = os.environ.get("OPENAI_API")
+ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
 
 # Define an authorization mechanism with a decorator
-def auth(func: Callable) -> Callable:
+def auth(func: Callable, admin_id: Union[int, None]) -> Callable:
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id in context.bot_data.get("authorized_users", set()):
+        logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
+        if (admin_id is not None and update.effective_user.id == admin_id) \
+                or update.effective_user.id in context.bot_data.get("authorized_users", set()):
             await func(update, context)
         else:
-            await update.message.reply_text("You are not authorized to use this bot, sorry.")
+            await update.message.reply_text(
+                "You are not authorized to use this bot, sorry."
+                if admin_id is None else "This command can be run only by an administrator"
+            )
 
     return wrapper
+
+
+# Define the real decorators
+auth_admin = partial(auth, admin_id=ADMIN_USER_ID)
+auth_user = partial(auth, admin_id=None)
 
 
 # Define a few command handlers. These usually take the two arguments update and
@@ -63,23 +74,38 @@ async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Help!")
 
 
-@auth
+@auth_user
 async def echo(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Echo the user's message"""
     await update.message.reply_text(update.message.text)
 
 
+@auth_admin
+async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command"""
+    await update.message.reply_text("Hello, admin!")
+
+
 async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Authorize a user (step 1)"""
-    user = update.effective_user
+    user = update.message.from_user
 
     if "authorized_users" not in ctx.bot_data:
         logger.info("Initializing 'authorized_users'")
         ctx.bot_data["authorized_users"] = set()
 
+    if "banned_users" not in ctx.bot_data:
+        logger.info("Initializing 'banned_users'")
+        ctx.bot_data["banned_users"] = set()
+
     logger.info("User %s (%s) entered the authorization step", user.first_name, user.id)
 
-    if update.effective_user.id in ctx.bot_data["authorized_users"]:
+    if user.id in ctx.bot_data["banned_users"]:
+        logger.info("User %s (%s) is banned", user.first_name, user.id)
+        await update.message.reply_text("I'm sorry, but you have been banned. Contact the admin to un-ban you.")
+
+        return ConversationHandler.END
+    elif user.id in ctx.bot_data["authorized_users"]:
         logger.info("User %s (%s) is already authorized", user.first_name, user.id)
         await update.message.reply_text("You are already authorized!")
 
@@ -105,14 +131,18 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Authorize a user (step 2)"""
-    authorized_users = ctx.bot_data["authorized_users"]
+    authorized_users: Set = ctx.bot_data["authorized_users"]
+    banned_users: Set = ctx.bot_data["banned_users"]
     user = update.message.from_user
 
     if ctx.user_data["verify"]["answer"] == update.message.text:
         logger.info("User %s (%s) is now authorized", user.first_name, user.id)
 
         await update.message.reply_text("That's correct! You have been authorized.")
-        authorized_users.add(update.effective_user.id)
+
+        authorized_users.add(user.id)
+        banned_users.discard(user.id)
+        ctx.user_data["verify"] = None
 
         return ConversationHandler.END
     else:
@@ -121,8 +151,11 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         if ctx.user_data["auth_attempts"] == 0:
             logger.info("User %s (%s) has given 3 wrong answer. Banned", user.first_name, user.id)
             await update.message.reply_text(
-                "You gave 3 wrong answers! I'm sorry, but you are banned. Ask the administrator to un-ban you."
+                "You gave 3 wrong answers! I'm sorry, but you are banned. Ask the admin to un-ban you."
             )
+            banned_users.add(user.id)
+            authorized_users.discard(user.id)
+
             return ConversationHandler.END
 
         logger.info(
@@ -195,6 +228,9 @@ def main() -> None:
     # Start/Stop/Help commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+
+    # Admin command
+    application.add_handler(CommandHandler("admin", admin))
 
     # Authorize step
     auth_handler = ConversationHandler(
