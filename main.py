@@ -13,7 +13,7 @@ from typing import Callable, Dict, Set, Union
 from functools import wraps, partial
 
 from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, ChatType
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, ConversationHandler, \
     MessageHandler, filters, PicklePersistence
 
@@ -27,7 +27,7 @@ AUTH_QUESTIONS = json.load(pathlib.Path(".verify.json").open(mode="r", encoding=
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 # Define an authorization mechanism with a decorator
 def auth(func: Callable, admin_id: Union[int, None]) -> Callable:
     @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
         if (admin_id is not None and update.effective_user.id == admin_id) \
                 or update.effective_user.id in context.bot_data.get("authorized_users", set()):
@@ -53,20 +53,20 @@ def auth(func: Callable, admin_id: Union[int, None]) -> Callable:
                 "You are not authorized to use this bot, sorry."
                 if admin_id is None else "This command can be run only by an administrator"
             )
-
     return wrapper
 
 
-# Define the real decorators
+# Define the auth decorators
 auth_admin = partial(auth, admin_id=ADMIN_USER_ID)
 auth_user = partial(auth, admin_id=None)
 
 
-# Define a few command handlers. These usually take the two arguments update and
-# context.
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
-    await update.message.reply_text("Hi!")
+    await update.message.reply_text(
+        f"Hey, {update.message.from_user.first_name}! I'm happy to chat with you. What do you want to know?"
+        "Use the /help command if you want some help."
+    )
 
 
 async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -83,11 +83,23 @@ async def echo(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 @auth_admin
 async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command"""
+    # If /admin is used in a group, warn the user and do nothing
+    if update.message.chat.type != ChatType.PRIVATE:
+        logger.info("Admin functions should be accessed via a private chat only")
+        await update.message.reply_text("This command can only be run in 'private' chats.")
+        return
+
     await update.message.reply_text("Hello, admin!")
 
 
 async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Authorize a user (step 1)"""
+    # If /auth is used in a group, warn and end the conversation
+    if update.message.chat.type != ChatType.PRIVATE:
+        logger.info("Authorization should be requested via a private chat only")
+        await update.message.reply_text("This command can only be run in 'private' chats.")
+        return ConversationHandler.END
+
     user = update.message.from_user
 
     if "authorized_users" not in ctx.bot_data:
@@ -102,11 +114,13 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     if user.id in ctx.bot_data["banned_users"]:
         logger.info("User %s (%s) is banned", user.first_name, user.id)
+
         await update.message.reply_text("I'm sorry, but you have been banned. Contact the admin to un-ban you.")
 
         return ConversationHandler.END
     elif user.id in ctx.bot_data["authorized_users"]:
         logger.info("User %s (%s) is already authorized", user.first_name, user.id)
+
         await update.message.reply_text("You are already authorized!")
 
         return ConversationHandler.END
@@ -119,6 +133,7 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         if "verify" not in (user_data := ctx.user_data):
             user_data["verify"] = None
 
+        # Pick a random "secret" question to verify the user
         user_data["verify"] = choice(AUTH_QUESTIONS)
 
         await update.message.reply_text(
