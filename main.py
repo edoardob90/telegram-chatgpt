@@ -10,7 +10,7 @@ from uuid import uuid4
 import json
 from random import choice
 from typing import Callable, Dict, Set, Union
-from functools import wraps, partial
+from functools import wraps
 
 from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
 from telegram.constants import ParseMode, ChatType
@@ -41,24 +41,21 @@ ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
 
 # Define an authorization mechanism with a decorator
-def auth(func: Callable, admin_id: Union[int, None]) -> Callable:
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
-        if (admin_id is not None and update.effective_user.id == admin_id) \
-                or update.effective_user.id in context.bot_data.get("authorized_users", set()):
-            await func(update, context)
-        else:
-            await update.message.reply_text(
-                "You are not authorized to use this bot, sorry."
-                if admin_id is None else "This command can be run only by an administrator"
-            )
-    return wrapper
-
-
-# Define the auth decorators
-auth_admin = partial(auth, admin_id=ADMIN_USER_ID)
-auth_user = partial(auth, admin_id=None)
+def auth(admin_id: Union[int, None]) -> Callable:
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
+            if (admin_id is not None and update.effective_user.id == admin_id) \
+                    or update.effective_user.id in context.bot_data.get("authorized_users", set()):
+                await func(update, context)
+            else:
+                await update.message.reply_text(
+                    "You are not authorized to use this bot, sorry."
+                    if admin_id is None else "This command can be run only by an administrator."
+                )
+        return wrapper
+    return decorator
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -74,13 +71,13 @@ async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Help!")
 
 
-@auth_user
+@auth(None)
 async def echo(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Echo the user's message"""
     await update.message.reply_text(update.message.text)
 
 
-@auth_admin
+@auth(ADMIN_USER_ID)
 async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command"""
     # If /admin is used in a group, warn the user and do nothing
