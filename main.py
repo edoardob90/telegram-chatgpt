@@ -28,9 +28,6 @@ escape_markdown = partial(_escape_markdown, version=2)
 # Load .env file
 dotenv.load_dotenv()
 
-# Load the question/answer file for user verification
-AUTH_QUESTIONS = json.load(pathlib.Path(".verify.json").open(mode="r", encoding="utf-8"))
-
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
@@ -38,12 +35,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-AUTHORIZE, VERIFY, QUESTION = 0, 1, 2
+AUTHORIZE, VERIFY, QUESTION = range(3)
 
 # Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API = os.environ.get("OPENAI_API")
 ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
+
+# Load the question/answer file for user verification
+try:
+    AUTH_QUESTIONS = json.load(pathlib.Path(".verify.json").open(mode="r", encoding="utf-8"))
+except FileNotFoundError:
+    logger.error("The file '.verify.json' containing users' verification questions does not exists.")
+    raise
 
 # Set OpenAI API key
 openai_api.set_api_key(OPENAI_API)
