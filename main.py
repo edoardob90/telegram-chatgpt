@@ -5,6 +5,7 @@
 import logging
 import os
 import pathlib
+import re
 from html import escape
 from uuid import uuid4
 import json
@@ -22,8 +23,6 @@ import dotenv
 
 import openai_api
 
-# Shortcut to escape Markdown reserved characters
-escape_markdown = partial(_escape_markdown, version=2)
 
 # Load .env file
 dotenv.load_dotenv()
@@ -51,6 +50,17 @@ except FileNotFoundError:
 
 # Set OpenAI API key
 openai_api.set_api_key(OPENAI_API)
+
+
+# Helper function to escape Markdown reserved characters
+def escape_markdown(text: str) -> str:
+    """Helper function to escape telegram markup symbols.
+    A slightly customized version of `telegram.helpers.escape_markdown`
+    """
+    patt = re.compile(r"(`+.*?`+)", re.DOTALL | re.MULTILINE)
+    _text = [_escape_markdown(s, version=2) if not s.startswith("`") else s for s in re.split(patt, text)]
+
+    return "".join(_text)
 
 
 # Define an authorization mechanism with a decorator
@@ -140,7 +150,7 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         reply = response["choices"][0]["message"]["content"]
         # Store the assistant's reply in user's message history
         user_data["messages"].append({"role": "assistant", "content": reply})
-        await update.message.reply_text(reply)
+        await update.message.reply_text(escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2)
 
     return QUESTION
 

@@ -2,7 +2,7 @@
 OpenAI utils
 """
 import os
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Any
 
 import openai
 from openai.error import OpenAIError
@@ -49,13 +49,13 @@ def num_tokens_from_messages(messages: List[Dict], model: str = "gpt-3.5-turbo-0
         raise NotImplementedError(f"num_tokens_from_messages() is not presently implemented for model {model}.")
 
 
-def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301"):
+def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any:
     """Prepare and send an API request"""
     # TODO: check the number of tokens < 2048 (max 4096), cut it if necessary
     # TODO: might be better to do an async request
     try:
         response = openai.ChatCompletion.create(model=model, temperature=0.8, messages=messages)
-    # TODO: be more specific with the exception type (e.g., max tokens limit reached)
+    # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError as err:
         raise RuntimeError("Error while performing an API request to OpenAI") from err
     else:
