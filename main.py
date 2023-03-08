@@ -9,15 +9,21 @@ from html import escape
 from uuid import uuid4
 import json
 from random import choice
-from typing import Callable, Dict, Set, Union
-from functools import wraps
+from typing import Callable, Set, Union, Any
+from functools import wraps, partial
 
 from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
 from telegram.constants import ParseMode, ChatType
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, ConversationHandler, \
     MessageHandler, filters, PicklePersistence
+from telegram.helpers import escape_markdown as _escape_markdown
 
 import dotenv
+
+import openai_api
+
+# Shortcut to escape Markdown reserved characters
+escape_markdown = partial(_escape_markdown, version=2)
 
 # Load .env file
 dotenv.load_dotenv()
@@ -32,27 +38,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-AUTHORIZE, VERIFY = range(2)
+AUTHORIZE, VERIFY, QUESTION = 0, 1, 2
 
 # Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API = os.environ.get("OPENAI_API")
 ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
+# Set OpenAI API key
+openai_api.set_api_key(OPENAI_API)
+
 
 # Define an authorization mechanism with a decorator
 def auth(admin_id: Union[int, None]) -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Union[Any, None]:
             logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
             if (admin_id is not None and update.effective_user.id == admin_id) \
                     or update.effective_user.id in context.bot_data.get("authorized_users", set()):
-                await func(update, context)
+                return await func(update, context)
             else:
                 await update.message.reply_text(
                     "You are not authorized to use this bot, sorry."
-                    if admin_id is None else "This command can be run only by an administrator."
+                    if admin_id is None else "This command can only be run by an administrator."
                 )
         return wrapper
     return decorator
@@ -68,13 +77,78 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
-    await update.message.reply_text("Help!")
+    await update.message.reply_text(
+        """Here's how you can interact with me:
+
+\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat
+
+\- /ask: start a new conversation\. If you add something after the command, it will be used to prime the assistant, i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ or _an expert with italian dialects_
+
+\- /done or /stop: end the current chat\. It will also *erase* your message history
+
+\- /cancel: stop the current action""",
+        parse_mode=ParseMode.MARKDOWN_V2)
 
 
 @auth(None)
-async def echo(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    """Echo the user's message"""
-    await update.message.reply_text(update.message.text)
+async def start_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Initiate a new conversation with ChatGPT"""
+    user = update.message.from_user
+    user_data = ctx.user_data
+
+    if "messages" not in user_data:
+        logger.info("Initializing user %s (%s) message history", user.first_name, user.id)
+        user_data["messages"] = []
+
+    # Reset user's message history every time a new chat is opened
+    logger.info("User %s (%s) started a new chat, resetting message history", user.first_name, user.id)
+    user_data["messages"].clear()
+
+    if ctx.args:
+        # TODO: double-check that there aren't multiple "system" messages
+        logger.info("User %s (%s) sent a message to prime the assistant", user.first_name, user.id)
+        user_data["messages"].append({"role": "system", "content": " ".join(ctx.args)})
+
+    logger.info("User's messages so far: %s", user_data["messages"])
+
+    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything...")
+
+    return QUESTION
+
+
+async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask a question, taking into account the previous messages"""
+    user = update.message.from_user
+    user_data = ctx.user_data
+
+    user_data["messages"].append({"role": "user", "content": update.message.text})
+    logger.info("User's messages so far: %s", user_data["messages"])
+
+    try:
+        logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
+        response = openai_api.send_request(user_data["messages"])
+    except RuntimeError as err:
+        logger.error("An error occurred", exc_info=err)
+        await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
+        return ConversationHandler.END
+    else:
+        logger.info("Response OK, no errors, replying back to the user...")
+        reply = response["choices"][0]["message"]["content"]
+        # Store the assistant's reply in user's message history
+        user_data["messages"].append({"role": "assistant", "content": reply})
+        await update.message.reply_text(reply)
+
+    return QUESTION
+
+
+async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Terminates an open chat session"""
+    user = update.message.from_user
+    logger.info("User %s (%s) ended the conversation.", user.first_name, user.id)
+
+    await update.message.reply_text(f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask.")
+
+    return ConversationHandler.END
 
 
 @auth(ADMIN_USER_ID)
@@ -83,7 +157,10 @@ async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     # If /admin is used in a group, warn the user and do nothing
     if update.message.chat.type != ChatType.PRIVATE:
         logger.info("Admin functions should be accessed via a private chat only")
-        await update.message.reply_text("This command can only be run in 'private' chats.")
+        await update.message.reply_text(
+            "This command can only be run in a *private* chat\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return
 
     await update.message.reply_text("Hello, admin!")
@@ -91,13 +168,20 @@ async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Authorize a user (step 1)"""
+    user = update.message.from_user
+
     # If /auth is used in a group, warn and end the conversation
     if update.message.chat.type != ChatType.PRIVATE:
-        logger.info("Authorization should be requested via a private chat only")
-        await update.message.reply_text("This command can only be run in 'private' chats.")
+        logger.info(
+            "User %s (%s) attempted authorization in a group: it should be done in a private chat only",
+            user.first_name,
+            user.id
+        )
+        await update.message.reply_text(
+            "This command can only be run in a *private* chat\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return ConversationHandler.END
-
-    user = update.message.from_user
 
     if "authorized_users" not in ctx.bot_data:
         logger.info("Initializing 'authorized_users'")
@@ -134,8 +218,9 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         user_data["verify"] = choice(AUTH_QUESTIONS)
 
         await update.message.reply_text(
-            "Okay. Answer the following question to verify that you know my creator:\n\n"
-            f"'{user_data['verify']['question']}'"
+            "Okay\. Answer the following question to verify that you know my creator: "
+            f"_{user_data['verify']['question']}_",
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
         return VERIFY
@@ -147,10 +232,10 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     banned_users: Set = ctx.bot_data["banned_users"]
     user = update.message.from_user
 
-    if ctx.user_data["verify"]["answer"] == update.message.text:
+    if update.message.text.lower() == ctx.user_data["verify"]["answer"]:
         logger.info("User %s (%s) is now authorized", user.first_name, user.id)
 
-        await update.message.reply_text("That's correct! You have been authorized.")
+        await update.message.reply_text("That's correct 🎉! You have been authorized.")
 
         authorized_users.add(user.id)
         banned_users.discard(user.id)
@@ -178,7 +263,9 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         )
 
         await update.message.reply_text(
-            f"I'm sorry, that's not the right answer. Try again. You have {ctx.user_data['auth_attempts']} attempts left."
+            "I'm sorry, that's not the right answer ☹️\. Try again\. "
+            f"You have *{ctx.user_data['auth_attempts']}* attempts left\.",
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
         return VERIFY
@@ -237,14 +324,13 @@ def main() -> None:
     # Create the Application and pass it your bot's token.
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
 
-    # Start/Stop/Help commands
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
+    # Basic commands: /start, /help, /admin
+    application.add_handlers(handlers={
+        -1: [CommandHandler("start", start), CommandHandler("help", help_command)],
+        0: [CommandHandler("admin", admin)]
+    })
 
-    # Admin command
-    application.add_handler(CommandHandler("admin", admin))
-
-    # Authorize step
+    # Authorization handler
     auth_handler = ConversationHandler(
         entry_points=[
             CommandHandler("auth", authorize)
@@ -256,10 +342,25 @@ def main() -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
-    application.add_handler(auth_handler)
+    application.add_handler(auth_handler, group=1)
 
-    # Default action: echo the user's message
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    # ChatGPT conversation handler
+    gpt_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("ask", start_chat)
+        ],
+        states={
+            QUESTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("done", end_chat),
+            CommandHandler("stop", end_chat),
+            CommandHandler("cancel", end_chat)
+        ]
+    )
+    application.add_handler(gpt_handler, group=2)
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
