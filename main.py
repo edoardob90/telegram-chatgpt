@@ -295,6 +295,11 @@ async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle unrecognized commands"""
+    await update.message.reply_text(f"Unrecognized command '{update.message.text}'. Say what?")
+
+
 # async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 #     """Handle the inline query. This is run when you type: @botusername <query>"""
 #     query = update.inline_query.query
@@ -375,6 +380,9 @@ def main() -> None:
         ]
     )
     application.add_handler(gpt_handler, group=2)
+
+    # Fallback handler for unknown commands
+    application.add_handler(MessageHandler(filters.COMMAND, fallback), group=-1)
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
