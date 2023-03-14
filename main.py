@@ -101,11 +101,12 @@ async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 \- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat
 
-\- /ask: start a new conversation\. If you add something after the command, it will be used to prime the assistant, i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ or _an expert with italian dialects_
+\- /ask: start a new conversation\. If you add something after the command, it will be used to prime the assistant, "
+"i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ or _an expert with italian dialects_
 
 \- /done or /stop: end the current chat\. It will also *erase* your message history
 
-\- /cancel: stop the current action""",
+\- /cancel: stop the currently active action \(if any\)""",
         parse_mode=ParseMode.MARKDOWN_V2)
 
 
@@ -302,7 +303,9 @@ async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle unrecognized commands"""
-    await update.message.reply_text(f"Unrecognized command '{update.message.text}'. Say what?")
+    await update.message.reply_text(f"I couldn't recognize your command `{update.message.text}`\. "
+                                    "Would you try again? Use /help if you're unsure\.",
+                                    parse_mode=ParseMode.MARKDOWN_V2)
 
 
 def main() -> None:
@@ -317,10 +320,14 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
 
     # Basic commands: /start, /help, /admin
-    application.add_handlers(handlers={
-        -1: [CommandHandler("start", start), CommandHandler("help", help_command)],
-        0: [CommandHandler("admin", admin)]
-    })
+    application.add_handlers(
+        [
+            CommandHandler("start", start),
+            CommandHandler("help", help_command),
+            CommandHandler("admin", admin)
+        ],
+        group=1
+    )
 
     # Authorization handler
     auth_handler = ConversationHandler(
@@ -352,10 +359,10 @@ def main() -> None:
             CommandHandler("cancel", end_chat)
         ]
     )
-    application.add_handler(gpt_handler, group=2)
+    application.add_handler(gpt_handler, group=1)
 
     # Fallback handler for unknown commands
-    application.add_handler(MessageHandler(filters.COMMAND, fallback), group=-1)
+    application.add_handler(MessageHandler(filters.COMMAND, fallback), group=1)
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
