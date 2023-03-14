@@ -6,17 +6,22 @@ import logging
 import os
 import pathlib
 import re
-from html import escape
-from uuid import uuid4
 import json
 from random import choice
 from typing import Callable, Set, Union, Any
-from functools import wraps, partial
+from functools import wraps
 
-from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
+from telegram import Update
 from telegram.constants import ParseMode, ChatType
-from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, ConversationHandler, \
-    MessageHandler, filters, PicklePersistence
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+    PicklePersistence
+)
 from telegram.helpers import escape_markdown as _escape_markdown
 
 import dotenv
@@ -298,38 +303,6 @@ async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
 async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle unrecognized commands"""
     await update.message.reply_text(f"Unrecognized command '{update.message.text}'. Say what?")
-
-
-# async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-#     """Handle the inline query. This is run when you type: @botusername <query>"""
-#     query = update.inline_query.query
-#
-#     if query == "":
-#         return
-#
-#     results = [
-#         InlineQueryResultArticle(
-#             id=str(uuid4()),
-#             title="Caps",
-#             input_message_content=InputTextMessageContent(query.upper()),
-#         ),
-#         InlineQueryResultArticle(
-#             id=str(uuid4()),
-#             title="Bold",
-#             input_message_content=InputTextMessageContent(
-#                 f"<b>{escape(query)}</b>", parse_mode=ParseMode.HTML
-#             ),
-#         ),
-#         InlineQueryResultArticle(
-#             id=str(uuid4()),
-#             title="Italic",
-#             input_message_content=InputTextMessageContent(
-#                 f"<i>{escape(query)}</i>", parse_mode=ParseMode.HTML
-#             ),
-#         ),
-#     ]
-#
-#     await update.inline_query.answer(results)
 
 
 def main() -> None:
