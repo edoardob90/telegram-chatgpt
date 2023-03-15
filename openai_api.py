@@ -52,12 +52,12 @@ def num_tokens_from_messages(messages: List[Dict], model: str = "gpt-3.5-turbo-0
         raise NotImplementedError(f"num_tokens_from_messages() is not presently implemented for model {model}.")
 
 
-def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any:
+async def chat_completion(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any:
     """Prepare and send an API request"""
     # TODO: check the number of tokens < 2048 (max 4096), cut it if necessary
     # TODO: might be better to do an async request
     try:
-        response = openai.ChatCompletion.create(model=model, temperature=0.8, messages=messages)
+        response = await openai.ChatCompletion.acreate(model=model, temperature=0.8, messages=messages)
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError as err:
         raise RuntimeError("Error while performing a chat API request") from err
@@ -65,12 +65,12 @@ def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any
         return response
 
 
-def translate_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
+async def transcribe_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
     """Transcribe & translate audio file to English text"""
     filepath = pathlib.Path(filepath) if isinstance(filepath, str) else filepath
     try:
         with filepath.open("rb") as file:
-            response = openai.Audio.translate(model="whisper-1", file=file, **kwargs)
+            response = await openai.Audio.atranscribe(model="whisper-1", file=file, **kwargs)
     except FileNotFoundError as err:
         raise RuntimeError(f"File '{filepath.name}' cannot be found") from err
     except OpenAIError as err:

@@ -185,7 +185,7 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         AudioSegment.from_ogg(temp_audio).export(temp_mp3, format="mp3")
         # Transcribe and translate audio
         try:
-            audio_text = openai_api.translate_audio(temp_mp3)
+            audio_text = await openai_api.transcribe_audio(temp_mp3)
         except RuntimeError as err:
             logger.error("An error occurred with Whisper API", exc_info=err)
             await update.message.reply_text("I'm sorry, but I had some troubles with your audio message. "
@@ -203,7 +203,7 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     try:
         logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
-        response = openai_api.send_request(user_data["messages"])
+        response = await openai_api.chat_completion(user_data["messages"])
     except RuntimeError as err:
         logger.error("An error occurred with Chat API", exc_info=err)
         await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
