@@ -4,11 +4,13 @@ OpenAI utils
 import os
 from typing import List, Dict, Union, Any
 import pathlib
+import logging
 
 import openai
 from openai.error import OpenAIError
 import tiktoken
 import dotenv
+from pydub import AudioSegment
 
 
 def set_api_key(api_key: str = None) -> None:
@@ -64,7 +66,7 @@ def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any
 
 
 def translate_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
-    """Translate audio file to English text"""
+    """Transcribe & translate audio file to English text"""
     filepath = pathlib.Path(filepath) if isinstance(filepath, str) else filepath
     try:
         with filepath.open("rb") as file:
@@ -78,12 +80,19 @@ def translate_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
 
 
 if __name__ == "__main__":
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
+    log.addHandler(logging.StreamHandler())
+
     dotenv.load_dotenv()
     openai.api_key = os.environ.get("OPENAI_API")
 
-    audio_file = pathlib.Path("files/CDF.mp3")
+    audio_file = pathlib.Path("audio/one.ogg")
 
-    audio_text = translate_audio(audio_file)
+    AudioSegment.from_ogg(audio_file).export("./audio/one.mp3", format="mp3")
+    audio_text = translate_audio("audio/one.mp3")
+
+    print(audio_text)
 
     _messages = [
         {"role": "system",
