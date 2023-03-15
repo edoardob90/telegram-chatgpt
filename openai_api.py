@@ -3,6 +3,7 @@ OpenAI utils
 """
 import os
 from typing import List, Dict, Union, Any
+import pathlib
 
 import openai
 from openai.error import OpenAIError
@@ -57,7 +58,21 @@ def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any
         response = openai.ChatCompletion.create(model=model, temperature=0.8, messages=messages)
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError as err:
-        raise RuntimeError("Error while performing an API request to OpenAI") from err
+        raise RuntimeError("Error while performing a chat API request") from err
+    else:
+        return response
+
+
+def translate_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
+    """Translate audio file to English text"""
+    filepath = pathlib.Path(filepath) if isinstance(filepath, str) else filepath
+    try:
+        with filepath.open("rb") as file:
+            response = openai.Audio.translate(model="whisper-1", file=file, **kwargs)
+    except FileNotFoundError as err:
+        raise RuntimeError(f"File '{filepath.name}' cannot be found") from err
+    except OpenAIError as err:
+        raise RuntimeError("Error while performing an audio translation API request") from err
     else:
         return response
 
@@ -65,14 +80,17 @@ def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any
 if __name__ == "__main__":
     dotenv.load_dotenv()
     openai.api_key = os.environ.get("OPENAI_API")
+
+    audio_file = pathlib.Path("files/CDF.mp3")
+
+    audio_text = translate_audio(audio_file)
+
     _messages = [
         {"role": "system",
-         "content": "You are a friendly physics high-school teacher."},
+         "content": "You are a friendly high-school teacher."},
         {"role": "user",
-         "content": "Explain the many-world interpretation of quantum mechanics"},
+         "content": audio_text["text"]},
     ]
-
-    print(num_tokens_from_messages(_messages))
 
     _response = send_request(_messages)
 
