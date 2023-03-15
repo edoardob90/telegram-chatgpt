@@ -27,6 +27,7 @@ from telegram.ext import (
 from telegram.helpers import escape_markdown as _escape_markdown
 
 import dotenv
+from pydub import AudioSegment
 
 import openai_api
 
@@ -162,7 +163,8 @@ async def start_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     logger.info("User's messages so far: %s", user_data["messages"])
 
-    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything...")
+    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything! "
+                                    "Write me or send me a voice message...")
 
     return QUESTION
 
@@ -172,14 +174,38 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     user_data = ctx.user_data
 
-    user_data["messages"].append({"role": "user", "content": update.message.text})
+    # Check if the message contained audio
+    if audio := update.message.voice:
+        # Download voice message from Telegram
+        audio_file = await audio.get_file()
+        temp_audio = pathlib.Path("audio") / f"{audio_file.file_id}.ogg"
+        await audio_file.download_to_drive(custom_path=temp_audio)
+        # Convert OGG to MP3
+        temp_mp3 = temp_audio.parent / f"{temp_audio.stem}.mp3"
+        AudioSegment.from_ogg(temp_audio).export(temp_mp3, format="mp3")
+        # Transcribe and translate audio
+        try:
+            audio_text = await openai_api.transcribe_audio(temp_mp3)
+        except RuntimeError as err:
+            logger.error("An error occurred with Whisper API", exc_info=err)
+            await update.message.reply_text("I'm sorry, but I had some troubles with your audio message. "
+                                            "Use /ask to record it once again.")
+            return ConversationHandler.END
+        else:
+            user_data["messages"].append({"role": "user", "content": audio_text["text"]})
+        finally:
+            temp_mp3.unlink()
+            temp_audio.unlink()
+    elif update.message.text:
+        user_data["messages"].append({"role": "user", "content": update.message.text})
+
     logger.info("User's messages so far: %s", user_data["messages"])
 
     try:
         logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
-        response = openai_api.send_request(user_data["messages"])
+        response = await openai_api.chat_completion(user_data["messages"])
     except RuntimeError as err:
-        logger.error("An error occurred", exc_info=err)
+        logger.error("An error occurred with Chat API", exc_info=err)
         await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
         return ConversationHandler.END
     else:
@@ -381,7 +407,7 @@ def main() -> None:
         ],
         states={
             QUESTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question)
+                MessageHandler(~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question)
             ]
         },
         fallbacks=[
