@@ -2,17 +2,19 @@
 # pylint: disable=unused-argument, wrong-import-position
 # This program is dedicated to the public domain under the CC0 license.
 
+import html
+import json
 import logging
 import os
 import pathlib
 import re
-import json
+import traceback
+from functools import wraps
 from random import choice
 from typing import Callable, Set, Union, Any
-from functools import wraps
-import traceback
-import html
 
+import dotenv
+from pydub import AudioSegment
 from telegram import Update
 from telegram.constants import ParseMode, ChatType
 from telegram.ext import (
@@ -26,11 +28,7 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
-import dotenv
-from pydub import AudioSegment
-
 import openai_api
-
 
 # Load .env file
 dotenv.load_dotenv()
@@ -100,16 +98,18 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     await update.message.reply_text(
-        """Here's how you can interact with me:
+        "Here's how you can interact with me:\n\n"
 
-\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat
+        "\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat\n\n"
 
-\- /ask: start a new conversation\. If you add something after the command, it will be used to prime the assistant, "
-"i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ or _an expert with italian dialects_
+        "\- /ask: start a new conversation\. If you add something after the command, "
+        "it will be used to prime the assistant, "
+        "i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ "
+        "or _an expert with italian dialects_\n\n"
 
-\- /done or /stop: end the current chat\. It will also *erase* your message history
+        "\- /done or /stop: end the current chat\. It will also *erase* your message history\n\n"
 
-\- /cancel: stop the currently active action \(if any\)""",
+        "\- /cancel: stop the currently active action \(if any\)",
         parse_mode=ParseMode.MARKDOWN_V2)
 
 
