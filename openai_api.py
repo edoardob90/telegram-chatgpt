@@ -3,11 +3,14 @@ OpenAI utils
 """
 import os
 from typing import List, Dict, Union, Any
+import pathlib
+import logging
 
 import openai
 from openai.error import OpenAIError
 import tiktoken
 import dotenv
+from pydub import AudioSegment
 
 
 def set_api_key(api_key: str = None) -> None:
@@ -49,30 +52,54 @@ def num_tokens_from_messages(messages: List[Dict], model: str = "gpt-3.5-turbo-0
         raise NotImplementedError(f"num_tokens_from_messages() is not presently implemented for model {model}.")
 
 
-def send_request(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any:
+async def chat_completion(messages: List[Dict], model: str = "gpt-3.5-turbo-0301") -> Any:
     """Prepare and send an API request"""
     # TODO: check the number of tokens < 2048 (max 4096), cut it if necessary
     # TODO: might be better to do an async request
     try:
-        response = openai.ChatCompletion.create(model=model, temperature=0.8, messages=messages)
+        response = await openai.ChatCompletion.acreate(model=model, temperature=0.8, messages=messages)
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError as err:
-        raise RuntimeError("Error while performing an API request to OpenAI") from err
+        raise RuntimeError("Error while performing a chat API request") from err
+    else:
+        return response
+
+
+async def transcribe_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict:
+    """Transcribe & translate audio file to English text"""
+    filepath = pathlib.Path(filepath) if isinstance(filepath, str) else filepath
+    try:
+        with filepath.open("rb") as file:
+            response = await openai.Audio.atranscribe(model="whisper-1", file=file, **kwargs)
+    except FileNotFoundError as err:
+        raise RuntimeError(f"File '{filepath.name}' cannot be found") from err
+    except OpenAIError as err:
+        raise RuntimeError("Error while performing an audio translation API request") from err
     else:
         return response
 
 
 if __name__ == "__main__":
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
+    log.addHandler(logging.StreamHandler())
+
     dotenv.load_dotenv()
     openai.api_key = os.environ.get("OPENAI_API")
+
+    audio_file = pathlib.Path("audio/one.ogg")
+
+    AudioSegment.from_ogg(audio_file).export("./audio/one.mp3", format="mp3")
+    audio_text = translate_audio("audio/one.mp3")
+
+    print(audio_text)
+
     _messages = [
         {"role": "system",
-         "content": "You are a friendly physics high-school teacher."},
+         "content": "You are a friendly high-school teacher."},
         {"role": "user",
-         "content": "Explain the many-world interpretation of quantum mechanics"},
+         "content": audio_text["text"]},
     ]
-
-    print(num_tokens_from_messages(_messages))
 
     _response = send_request(_messages)
 

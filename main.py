@@ -2,15 +2,19 @@
 # pylint: disable=unused-argument, wrong-import-position
 # This program is dedicated to the public domain under the CC0 license.
 
+import html
+import json
 import logging
 import os
 import pathlib
 import re
-import json
+import traceback
+from functools import wraps
 from random import choice
 from typing import Callable, Set, Union, Any
-from functools import wraps
 
+import dotenv
+from pydub import AudioSegment
 from telegram import Update
 from telegram.constants import ParseMode, ChatType
 from telegram.ext import (
@@ -24,10 +28,7 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
-import dotenv
-
 import openai_api
-
 
 # Load .env file
 dotenv.load_dotenv()
@@ -97,17 +98,48 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     await update.message.reply_text(
-        """Here's how you can interact with me:
+        "Here's how you can interact with me:\n\n"
 
-\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat
+        "\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat\n\n"
 
-\- /ask: start a new conversation\. If you add something after the command, it will be used to prime the assistant, "
-"i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ or _an expert with italian dialects_
+        "\- /ask: start a new conversation\. If you add something after the command, "
+        "it will be used to prime the assistant, "
+        "i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ "
+        "or _an expert with italian dialects_\n\n"
 
-\- /done or /stop: end the current chat\. It will also *erase* your message history
+        "\- /done or /stop: end the current chat\. It will also *erase* your message history\n\n"
 
-\- /cancel: stop the currently active action \(if any\)""",
+        "\- /cancel: stop the currently active action \(if any\)",
         parse_mode=ParseMode.MARKDOWN_V2)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+
+    # Log the error before we do anything else, so we can see it even if something breaks.
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
+    # traceback.format_exception returns the usual python message about an exception, but as a
+    # list of strings rather than a single string, so we have to join them together.
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+
+    # Build the message with some markup and additional information about what happened.
+    # You might need to add some logic to deal with messages longer than the 4096-character limit.
+    update_str = update.to_dict() if isinstance(update, Update) else str(update)
+
+    message = (
+        f"An exception was raised while handling an update\n\n"
+        f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}"
+        "</pre>\n\n"
+        f"<pre>context.bot_data = {html.escape(str(context.bot_data))}</pre>\n\n"
+        f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
+        f"<pre>{html.escape(tb_string)}</pre>"
+    )
+
+    # Finally, send the message
+    if ADMIN_USER_ID is not None:
+        await context.bot.send_message(chat_id=ADMIN_USER_ID, text=message, parse_mode=ParseMode.HTML)
 
 
 @auth(None)
@@ -131,7 +163,8 @@ async def start_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     logger.info("User's messages so far: %s", user_data["messages"])
 
-    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything...")
+    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything! "
+                                    "Write me or send me a voice message...")
 
     return QUESTION
 
@@ -141,14 +174,38 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     user_data = ctx.user_data
 
-    user_data["messages"].append({"role": "user", "content": update.message.text})
+    # Check if the message contained audio
+    if audio := update.message.voice:
+        # Download voice message from Telegram
+        audio_file = await audio.get_file()
+        temp_audio = pathlib.Path("audio") / f"{audio_file.file_id}.ogg"
+        await audio_file.download_to_drive(custom_path=temp_audio)
+        # Convert OGG to MP3
+        temp_mp3 = temp_audio.parent / f"{temp_audio.stem}.mp3"
+        AudioSegment.from_ogg(temp_audio).export(temp_mp3, format="mp3")
+        # Transcribe and translate audio
+        try:
+            audio_text = await openai_api.transcribe_audio(temp_mp3)
+        except RuntimeError as err:
+            logger.error("An error occurred with Whisper API", exc_info=err)
+            await update.message.reply_text("I'm sorry, but I had some troubles with your audio message. "
+                                            "Use /ask to record it once again.")
+            return ConversationHandler.END
+        else:
+            user_data["messages"].append({"role": "user", "content": audio_text["text"]})
+        finally:
+            temp_mp3.unlink()
+            temp_audio.unlink()
+    elif update.message.text:
+        user_data["messages"].append({"role": "user", "content": update.message.text})
+
     logger.info("User's messages so far: %s", user_data["messages"])
 
     try:
         logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
-        response = openai_api.send_request(user_data["messages"])
+        response = await openai_api.chat_completion(user_data["messages"])
     except RuntimeError as err:
-        logger.error("An error occurred", exc_info=err)
+        logger.error("An error occurred with Chat API", exc_info=err)
         await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
         return ConversationHandler.END
     else:
@@ -350,7 +407,7 @@ def main() -> None:
         ],
         states={
             QUESTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question)
+                MessageHandler(~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question)
             ]
         },
         fallbacks=[
@@ -363,6 +420,9 @@ def main() -> None:
 
     # Fallback handler for unknown commands
     application.add_handler(MessageHandler(filters.COMMAND, fallback), group=1)
+
+    # Error handler
+    application.add_error_handler(error_handler)
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
