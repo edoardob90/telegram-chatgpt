@@ -24,7 +24,7 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     filters,
-    PicklePersistence
+    PicklePersistence,
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
@@ -49,9 +49,13 @@ ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
 # Load the question/answer file for user verification
 try:
-    AUTH_QUESTIONS = json.load(pathlib.Path(".verify.json").open(mode="r", encoding="utf-8"))
+    AUTH_QUESTIONS = json.load(
+        pathlib.Path(".verify.json").open(mode="r", encoding="utf-8")
+    )
 except FileNotFoundError:
-    logger.error("The file '.verify.json' containing users' verification questions does not exists.")
+    logger.error(
+        "The file '.verify.json' containing users' verification questions does not exists."
+    )
     raise
 
 # Set OpenAI API key
@@ -64,7 +68,10 @@ def escape_markdown(text: str) -> str:
     A slightly customized version of `telegram.helpers.escape_markdown`
     """
     patt = re.compile(r"(`+.*?`+)", re.DOTALL | re.MULTILINE)
-    _text = [_escape_markdown(s, version=2) if not s.startswith("`") else s for s in re.split(patt, text)]
+    _text = [
+        _escape_markdown(s, version=2) if not s.startswith("`") else s
+        for s in re.split(patt, text)
+    ]
 
     return "".join(_text)
 
@@ -73,17 +80,29 @@ def escape_markdown(text: str) -> str:
 def auth(admin_id: Union[int, None]) -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Union[Any, None]:
-            logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
-            if (admin_id is not None and update.effective_user.id == admin_id) \
-                    or update.effective_user.id in context.bot_data.get("authorized_users", set()):
+        async def wrapper(
+                update: Update, context: ContextTypes.DEFAULT_TYPE
+        ) -> Union[Any, None]:
+            logger.info(
+                "Auth request: user ID is %s, admin ID is %s",
+                update.effective_user.id,
+                admin_id,
+            )
+            if (
+                    admin_id is not None and update.effective_user.id == admin_id
+            ) or update.effective_user.id in context.bot_data.get(
+                "authorized_users", set()
+            ):
                 return await func(update, context)
             else:
                 await update.message.reply_text(
                     "You are not authorized to use this bot, sorry."
-                    if admin_id is None else "This command can only be run by an administrator."
+                    if admin_id is None
+                    else "This command can only be run by an administrator."
                 )
+
         return wrapper
+
     return decorator
 
 
@@ -99,18 +118,15 @@ async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     await update.message.reply_text(
         "Here's how you can interact with me:\n\n"
-
         "\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat\n\n"
-
         "\- /ask: start a new conversation\. If you add something after the command, "
         "it will be used to prime the assistant, "
         "i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ "
         "or _an expert with italian dialects_\n\n"
-
         "\- /done or /stop: end the current chat\. It will also *erase* your message history\n\n"
-
         "\- /cancel: stop the currently active action \(if any\)",
-        parse_mode=ParseMode.MARKDOWN_V2)
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,7 +137,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # traceback.format_exception returns the usual python message about an exception, but as a
     # list of strings rather than a single string, so we have to join them together.
-    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_list = traceback.format_exception(
+        None, context.error, context.error.__traceback__
+    )
     tb_string = "".join(tb_list)
 
     # Build the message with some markup and additional information about what happened.
@@ -139,7 +157,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Finally, send the message
     if ADMIN_USER_ID is not None:
-        await context.bot.send_message(chat_id=ADMIN_USER_ID, text=message, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(
+            chat_id=ADMIN_USER_ID, text=message, parse_mode=ParseMode.HTML
+        )
 
 
 @auth(None)
@@ -149,22 +169,34 @@ async def start_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user_data = ctx.user_data
 
     if "messages" not in user_data:
-        logger.info("Initializing user %s (%s) message history", user.first_name, user.id)
+        logger.info(
+            "Initializing user %s (%s) message history", user.first_name, user.id
+        )
         user_data["messages"] = []
 
     # Reset user's message history every time a new chat is opened
-    logger.info("User %s (%s) started a new chat, resetting message history", user.first_name, user.id)
+    logger.info(
+        "User %s (%s) started a new chat, resetting message history",
+        user.first_name,
+        user.id,
+    )
     user_data["messages"].clear()
 
     if ctx.args:
         # TODO: double-check that there aren't multiple "system" messages
-        logger.info("User %s (%s) sent a message to prime the assistant", user.first_name, user.id)
+        logger.info(
+            "User %s (%s) sent a message to prime the assistant",
+            user.first_name,
+            user.id,
+        )
         user_data["messages"].append({"role": "system", "content": " ".join(ctx.args)})
 
     logger.info("User's messages so far: %s", user_data["messages"])
 
-    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything! "
-                                    "Write me or send me a voice message...")
+    await update.message.reply_text(
+        f"Okay {user.first_name}, go ahead, ask me anything! "
+        "Write me or send me a voice message..."
+    )
 
     return QUESTION
 
@@ -188,11 +220,15 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             audio_text = await openai_api.transcribe_audio(temp_mp3)
         except RuntimeError as err:
             logger.error("An error occurred with Whisper API", exc_info=err)
-            await update.message.reply_text("I'm sorry, but I had some troubles with your audio message. "
-                                            "Use /ask to record it once again.")
+            await update.message.reply_text(
+                "I'm sorry, but I had some troubles with your audio message. "
+                "Use /ask to record it once again."
+            )
             return ConversationHandler.END
         else:
-            user_data["messages"].append({"role": "user", "content": audio_text["text"]})
+            user_data["messages"].append(
+                {"role": "user", "content": audio_text["text"]}
+            )
         finally:
             temp_mp3.unlink()
             temp_audio.unlink()
@@ -202,18 +238,24 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User's messages so far: %s", user_data["messages"])
 
     try:
-        logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
+        logger.info(
+            "User %s (%s) is sending a Chat API request...", user.first_name, user.id
+        )
         response = await openai_api.chat_completion(user_data["messages"])
     except RuntimeError as err:
         logger.error("An error occurred with Chat API", exc_info=err)
-        await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
+        await update.message.reply_text(
+            "I'm sorry, but something went wrong. Please, try again with the /ask command."
+        )
         return ConversationHandler.END
     else:
         logger.info("Response OK, no errors, replying back to the user...")
         reply = response["choices"][0]["message"]["content"]
         # Store the assistant's reply in user's message history
         user_data["messages"].append({"role": "assistant", "content": reply})
-        await update.message.reply_text(escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(
+            escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2
+        )
 
     return QUESTION
 
@@ -223,7 +265,9 @@ async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("User %s (%s) ended the conversation.", user.first_name, user.id)
 
-    await update.message.reply_text(f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask.")
+    await update.message.reply_text(
+        f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask."
+    )
 
     return ConversationHandler.END
 
@@ -236,7 +280,7 @@ async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("Admin functions should be accessed via a private chat only")
         await update.message.reply_text(
             "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
@@ -252,11 +296,11 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info(
             "User %s (%s) attempted authorization in a group: it should be done in a private chat only",
             user.first_name,
-            user.id
+            user.id,
         )
         await update.message.reply_text(
             "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return ConversationHandler.END
 
@@ -273,7 +317,9 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if user.id in ctx.bot_data["banned_users"]:
         logger.info("User %s (%s) is banned", user.first_name, user.id)
 
-        await update.message.reply_text("I'm sorry, but you have been banned. Contact the admin to un-ban you.")
+        await update.message.reply_text(
+            "I'm sorry, but you have been banned. Contact the admin to un-ban you."
+        )
 
         return ConversationHandler.END
     elif user.id in ctx.bot_data["authorized_users"]:
@@ -297,7 +343,7 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(
             "Okay\. Answer the following question to verify that you know my creator: "
             f"_{user_data['verify']['question']}_",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
 
         return VERIFY
@@ -323,7 +369,11 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         ctx.user_data["auth_attempts"] -= 1
 
         if ctx.user_data["auth_attempts"] == 0:
-            logger.info("User %s (%s) has given 3 wrong answer. Banned", user.first_name, user.id)
+            logger.info(
+                "User %s (%s) has given 3 wrong answer. Banned",
+                user.first_name,
+                user.id,
+            )
             await update.message.reply_text(
                 "You gave 3 wrong answers! I'm sorry, but you are banned. Ask the admin to un-ban you."
             )
@@ -336,13 +386,13 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             "User %s (%s) gave the wrong answer. Attempts left: %s",
             user.first_name,
             user.id,
-            ctx.user_data["auth_attempts"]
+            ctx.user_data["auth_attempts"],
         )
 
         await update.message.reply_text(
             "I'm sorry, that's not the right answer ☹️\. Try again\. "
             f"You have *{ctx.user_data['auth_attempts']}* attempts left\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
 
         return VERIFY
@@ -360,61 +410,61 @@ async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle unrecognized commands"""
-    await update.message.reply_text(f"I couldn't recognize your command `{update.message.text}`\. "
-                                    "Would you try again? Use /help if you're unsure\.",
-                                    parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(
+        f"I couldn't recognize your command `{update.message.text}`\. "
+        "Would you try again? Use /help if you're unsure\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 def main() -> None:
     """Run the bot."""
     if not (TELEGRAM_BOT_TOKEN and OPENAI_API):
-        raise RuntimeError("Either Telegram Bot token or OpenAI API key are missing! Abort.")
+        raise RuntimeError(
+            "Either Telegram Bot token or OpenAI API key are missing! Abort."
+        )
 
     # Bot persistence
     memory = PicklePersistence(filepath=pathlib.Path("telegram-chatgpt.pickle"))
 
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
+    application = (
+        Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
+    )
 
     # Basic commands: /start, /help, /admin
     application.add_handlers(
         [
             CommandHandler("start", start),
             CommandHandler("help", help_command),
-            CommandHandler("admin", admin)
+            CommandHandler("admin", admin),
         ],
-        group=1
+        group=1,
     )
 
     # Authorization handler
     auth_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("auth", authorize)
-        ],
-        states={
-            VERIFY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, verify)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        entry_points=[CommandHandler("auth", authorize)],
+        states={VERIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     application.add_handler(auth_handler, group=1)
 
     # ChatGPT conversation handler
     gpt_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("ask", start_chat)
-        ],
+        entry_points=[CommandHandler("ask", start_chat)],
         states={
             QUESTION: [
-                MessageHandler(~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question)
+                MessageHandler(
+                    ~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question
+                )
             ]
         },
         fallbacks=[
             CommandHandler("done", end_chat),
             CommandHandler("stop", end_chat),
-            CommandHandler("cancel", end_chat)
-        ]
+            CommandHandler("cancel", end_chat),
+        ],
     )
     application.add_handler(gpt_handler, group=1)
 
