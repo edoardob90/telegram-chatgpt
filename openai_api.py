@@ -5,12 +5,18 @@ import os
 from typing import List, Dict, Union, Any
 import pathlib
 import logging
+import asyncio
 
 import openai
 from openai.error import OpenAIError
 import tiktoken
 import dotenv
 from pydub import AudioSegment
+
+MODELS = [
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-0301",  # frozen snapshot, expires 1 June 2023
+]
 
 
 def set_api_key(api_key: str = None) -> None:
@@ -59,14 +65,15 @@ def num_tokens_from_messages(
 
 
 async def chat_completion(
-        messages: List[Dict], model: str = "gpt-3.5-turbo-0301"
+        messages: List[Dict], model: str = None, **kwargs
 ) -> Any:
-    """Prepare and send an API request"""
-    # TODO: check the number of tokens < 2048 (max 4096), cut it if necessary
-    # TODO: might be better to do an async request
+    """Prepare and send a Chat API request"""
+    if not model or model == "default":
+        model = "gpt-3.5-turbo"
+
     try:
         response = await openai.ChatCompletion.acreate(
-            model=model, temperature=0.8, messages=messages
+            model=model, messages=messages, **kwargs
         )
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError as err:
@@ -93,7 +100,7 @@ async def transcribe_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict
         return response
 
 
-if __name__ == "__main__":
+async def main():
     log = logging.getLogger(__name__)
     log.setLevel(logging.DEBUG)
     log.addHandler(logging.StreamHandler())
@@ -116,3 +123,7 @@ if __name__ == "__main__":
     _response = await chat_completion(_messages)
 
     print(_response["choices"][0]["message"]["content"])
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
