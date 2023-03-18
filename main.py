@@ -65,6 +65,20 @@ SETTINGS_NAMES = {
     "model": "Language model",
 }
 
+# A few goodbye messages
+goodbye_messages = [
+    "May the Force be with you, {user}. Goodbye!",
+    "Here's looking at you, {user}. Farewell!",
+    "To infinity and beyond, {user}. See ya!",
+    "Keep calm and carry on, {user}. Bye for now!",
+    "I'll be back, {user}. Until then, goodbye!",
+    "It's not goodbye, {user}. It's see you later!",
+    "Goodbye, {user}. And thanks for all the fish!",
+    "Parting is such sweet sorrow, {user}. Fare thee well!",
+    "May the odds be ever in your favor, {user}. Goodbye!",
+    "So long, {user}, and thanks for all the memories!",
+]
+
 # Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API = os.environ.get("OPENAI_API")
@@ -344,7 +358,7 @@ async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User %s (%s) ended the conversation.", user.first_name, user.id)
 
     await update.message.reply_text(
-        f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask."
+        choice(goodbye_messages).format(user=user.first_name)
     )
 
     return ConversationHandler.END
@@ -607,7 +621,7 @@ async def exit_settings(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Exit user's settings menu"""
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
-        f"Okay, bye {update.effective_user.first_name}! You can always customize your settings with /settings."
+        choice(goodbye_messages).format(user=update.effective_user.first_name)
     )
 
     return ConversationHandler.END
@@ -624,11 +638,11 @@ async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation."""
-    user = update.message.from_user
+    user = update.effective_user
     logger.info("User %s (%s) canceled the conversation.", user.first_name, user.id)
 
     await update.message.reply_text(
-        f"Bye, {user.first_name}! I hope we can talk again some day."
+        choice(goodbye_messages).format(user=user.first_name)
     )
 
     return ConversationHandler.END
