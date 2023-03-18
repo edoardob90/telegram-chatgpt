@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
     STORE,
 ) = range(5)
 
+# Chat's types
+PRIVATE, GROUP = ChatType.PRIVATE, ChatType.GROUP
+
 # User's settings names
 SETTINGS_NAMES = {
     "temperature": "Temperature",
@@ -61,6 +64,20 @@ SETTINGS_NAMES = {
     "frequency_penalty": "Frequency penalty",
     "model": "Language model",
 }
+
+# A few goodbye messages
+goodbye_messages = [
+    "May the Force be with you, {user}. Goodbye!",
+    "Here's looking at you, {user}. Farewell!",
+    "To infinity and beyond, {user}. See ya!",
+    "Keep calm and carry on, {user}. Bye for now!",
+    "I'll be back, {user}. Until then, goodbye!",
+    "It's not goodbye, {user}. It's see you later!",
+    "Goodbye, {user}. And thanks for all the fish!",
+    "Parting is such sweet sorrow, {user}. Fare thee well!",
+    "May the odds be ever in your favor, {user}. Goodbye!",
+    "So long, {user}, and thanks for all the memories!",
+]
 
 # Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -96,8 +113,9 @@ def escape_markdown(text: str) -> str:
     return "".join(_text)
 
 
-# Define an authorization mechanism with a decorator
 def auth(admin_id: Union[int, None]) -> Callable:
+    """Requires user's authorization (decorator)"""
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(
@@ -120,6 +138,48 @@ def auth(admin_id: Union[int, None]) -> Callable:
                     if admin_id is None
                     else "This command can only be run by an administrator."
                 )
+
+        return wrapper
+
+    return decorator
+
+
+def chat_type(c_type: str) -> Callable:
+    """Verifies that a command can be used in a given chat type (decorator)"""
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(
+                update: Update, context: ContextTypes.DEFAULT_TYPE
+        ) -> Union[Any, None]:
+            if update.effective_chat.type == c_type:
+                return await func(update, context)
+            else:
+                user = update.effective_user
+                if c_type == ChatType.PRIVATE:
+                    logger.info(
+                        "User %s (%s) wants to run '%s', which can be run only PRIVATE chats",
+                        user.first_name,
+                        user.id,
+                        func.__name__,
+                    )
+                    await update.message.reply_text(
+                        "This command can only be run in a *private* chat\.",
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                    )
+                    return ConversationHandler.END
+                elif c_type == ChatType.GROUP:
+                    logger.info(
+                        "User %s (%s) wants to run '%s', which can be run only in GROUP chats",
+                        user.first_name,
+                        user.id,
+                        func.__name__,
+                    )
+                    await update.message.reply_text(
+                        "This command can only be run in a *group* chat\.)",
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                    )
+                    return ConversationHandler.END
 
         return wrapper
 
@@ -294,47 +354,27 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Terminates an open chat session"""
-    user = update.message.from_user
+    user = update.effective_user
     logger.info("User %s (%s) ended the conversation.", user.first_name, user.id)
 
     await update.message.reply_text(
-        f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask."
+        choice(goodbye_messages).format(user=user.first_name)
     )
 
     return ConversationHandler.END
 
 
+@chat_type(PRIVATE)
 @auth(ADMIN_USER_ID)
 async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command"""
-    # If /admin is used in a group, warn the user and do nothing
-    if update.message.chat.type != ChatType.PRIVATE:
-        logger.info("Admin functions should be accessed via a private chat only")
-        await update.message.reply_text(
-            "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-        return
-
     await update.message.reply_text("Hello, admin!")
 
 
+@chat_type(PRIVATE)
 async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Authorize a user (step 1)"""
     user = update.message.from_user
-
-    # If /auth is used in a group, warn and end the conversation
-    if update.message.chat.type != ChatType.PRIVATE:
-        logger.info(
-            "User %s (%s) attempted authorization in a group: it should be done in a private chat only",
-            user.first_name,
-            user.id,
-        )
-        await update.message.reply_text(
-            "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-        return ConversationHandler.END
 
     if "authorized_users" not in ctx.bot_data:
         logger.info("Initializing 'authorized_users'")
@@ -429,6 +469,7 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return VERIFY
 
 
+@chat_type(PRIVATE)
 @auth(None)
 async def enter_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Enter user's settings"""
@@ -437,14 +478,6 @@ async def enter_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # The very first time entering /settings, we're NOT starting over by definition
     if "start_over" not in user_data:
         user_data["start_over"] = False
-
-    # Settings should be changed in a private chat only
-    if not user_data["start_over"] and update.message.chat.type != ChatType.PRIVATE:
-        await update.message.reply_text(
-            "To change your personal settings, chat with me in *private*\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-        return ConversationHandler.END
 
     # Initialize the default settings
     if "settings" not in user_data:
@@ -588,7 +621,7 @@ async def exit_settings(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Exit user's settings menu"""
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
-        "Okay, bye! You can always customize your settings with /settings."
+        choice(goodbye_messages).format(user=update.effective_user.first_name)
     )
 
     return ConversationHandler.END
@@ -605,11 +638,11 @@ async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation."""
-    user = update.message.from_user
+    user = update.effective_user
     logger.info("User %s (%s) canceled the conversation.", user.first_name, user.id)
 
     await update.message.reply_text(
-        f"Bye, {user.first_name}! I hope we can talk again some day."
+        choice(goodbye_messages).format(user=user.first_name)
     )
 
     return ConversationHandler.END
