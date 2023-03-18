@@ -15,7 +15,11 @@ from typing import Callable, Set, Union, Any
 
 import dotenv
 from pydub import AudioSegment
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.constants import ParseMode, ChatType
 from telegram.ext import (
     Application,
@@ -23,8 +27,9 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
-    PicklePersistence
+    PicklePersistence,
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
@@ -40,7 +45,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-AUTHORIZE, VERIFY, QUESTION = range(3)
+(
+    AUTHORIZE,
+    VERIFY,
+    QUESTION,
+    SETTINGS,
+    STORE,
+) = range(5)
+
+# User's settings names
+SETTINGS_NAMES = {
+    "temperature": "Temperature",
+    "top_p": "Top probability",
+    "presence_penalty": "Presence penalty",
+    "frequency_penalty": "Frequency penalty",
+    "model": "Language model",
+}
 
 # Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -49,9 +69,13 @@ ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
 # Load the question/answer file for user verification
 try:
-    AUTH_QUESTIONS = json.load(pathlib.Path(".verify.json").open(mode="r", encoding="utf-8"))
+    AUTH_QUESTIONS = json.load(
+        pathlib.Path(".verify.json").open(mode="r", encoding="utf-8")
+    )
 except FileNotFoundError:
-    logger.error("The file '.verify.json' containing users' verification questions does not exists.")
+    logger.error(
+        "The file '.verify.json' containing users' verification questions does not exists."
+    )
     raise
 
 # Set OpenAI API key
@@ -64,7 +88,10 @@ def escape_markdown(text: str) -> str:
     A slightly customized version of `telegram.helpers.escape_markdown`
     """
     patt = re.compile(r"(`+.*?`+)", re.DOTALL | re.MULTILINE)
-    _text = [_escape_markdown(s, version=2) if not s.startswith("`") else s for s in re.split(patt, text)]
+    _text = [
+        _escape_markdown(s, version=2) if not s.startswith("`") else s
+        for s in re.split(patt, text)
+    ]
 
     return "".join(_text)
 
@@ -73,17 +100,29 @@ def escape_markdown(text: str) -> str:
 def auth(admin_id: Union[int, None]) -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Union[Any, None]:
-            logger.info("Auth request: user ID is %s, admin ID is %s", update.effective_user.id, admin_id)
-            if (admin_id is not None and update.effective_user.id == admin_id) \
-                    or update.effective_user.id in context.bot_data.get("authorized_users", set()):
+        async def wrapper(
+                update: Update, context: ContextTypes.DEFAULT_TYPE
+        ) -> Union[Any, None]:
+            logger.info(
+                "Auth request: user ID is %s, admin ID is %s",
+                update.effective_user.id,
+                admin_id,
+            )
+            if (
+                    admin_id is not None and update.effective_user.id == admin_id
+            ) or update.effective_user.id in context.bot_data.get(
+                "authorized_users", set()
+            ):
                 return await func(update, context)
             else:
                 await update.message.reply_text(
                     "You are not authorized to use this bot, sorry."
-                    if admin_id is None else "This command can only be run by an administrator."
+                    if admin_id is None
+                    else "This command can only be run by an administrator."
                 )
+
         return wrapper
+
     return decorator
 
 
@@ -99,18 +138,16 @@ async def help_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     await update.message.reply_text(
         "Here's how you can interact with me:\n\n"
-
         "\- /auth: authorize yourself by answering a secret question\. It *must* be used in a private chat\n\n"
-
         "\- /ask: start a new conversation\. If you add something after the command, "
         "it will be used to prime the assistant, "
         "i\.e\., how you want me to behave\. For example, you can ask me to be _a friendly high\-school teacher_ "
         "or _an expert with italian dialects_\n\n"
-
         "\- /done or /stop: end the current chat\. It will also *erase* your message history\n\n"
-
-        "\- /cancel: stop the currently active action \(if any\)",
-        parse_mode=ParseMode.MARKDOWN_V2)
+        "\- /cancel: stop the currently active action \(if any\)\n\n"
+        "\- /settings: change the user's settings \(model type and properties\)",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,7 +158,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # traceback.format_exception returns the usual python message about an exception, but as a
     # list of strings rather than a single string, so we have to join them together.
-    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_list = traceback.format_exception(
+        None, context.error, context.error.__traceback__
+    )
     tb_string = "".join(tb_list)
 
     # Build the message with some markup and additional information about what happened.
@@ -139,7 +178,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Finally, send the message
     if ADMIN_USER_ID is not None:
-        await context.bot.send_message(chat_id=ADMIN_USER_ID, text=message, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(
+            chat_id=ADMIN_USER_ID, text=message, parse_mode=ParseMode.HTML
+        )
 
 
 @auth(None)
@@ -148,23 +189,44 @@ async def start_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     user_data = ctx.user_data
 
+    if "settings" not in user_data:
+        user_data["settings"] = {
+            "temperature": 0.8,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+            "top_p": 1.0,
+            "model": "default",
+        }
+
     if "messages" not in user_data:
-        logger.info("Initializing user %s (%s) message history", user.first_name, user.id)
+        logger.info(
+            "Initializing user %s (%s) message history", user.first_name, user.id
+        )
         user_data["messages"] = []
 
     # Reset user's message history every time a new chat is opened
-    logger.info("User %s (%s) started a new chat, resetting message history", user.first_name, user.id)
+    logger.info(
+        "User %s (%s) started a new chat, resetting message history",
+        user.first_name,
+        user.id,
+    )
     user_data["messages"].clear()
 
     if ctx.args:
         # TODO: double-check that there aren't multiple "system" messages
-        logger.info("User %s (%s) sent a message to prime the assistant", user.first_name, user.id)
+        logger.info(
+            "User %s (%s) sent a message to prime the assistant",
+            user.first_name,
+            user.id,
+        )
         user_data["messages"].append({"role": "system", "content": " ".join(ctx.args)})
 
     logger.info("User's messages so far: %s", user_data["messages"])
 
-    await update.message.reply_text(f"Okay {user.first_name}, go ahead, ask me anything! "
-                                    "Write me or send me a voice message...")
+    await update.message.reply_text(
+        f"Okay {user.first_name}, go ahead, ask me anything! "
+        "Write me or send me a voice message..."
+    )
 
     return QUESTION
 
@@ -188,11 +250,15 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             audio_text = await openai_api.transcribe_audio(temp_mp3)
         except RuntimeError as err:
             logger.error("An error occurred with Whisper API", exc_info=err)
-            await update.message.reply_text("I'm sorry, but I had some troubles with your audio message. "
-                                            "Use /ask to record it once again.")
+            await update.message.reply_text(
+                "I'm sorry, but I had some troubles with your audio message. "
+                "Use /ask to record it once again."
+            )
             return ConversationHandler.END
         else:
-            user_data["messages"].append({"role": "user", "content": audio_text["text"]})
+            user_data["messages"].append(
+                {"role": "user", "content": audio_text["text"]}
+            )
         finally:
             temp_mp3.unlink()
             temp_audio.unlink()
@@ -202,18 +268,26 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User's messages so far: %s", user_data["messages"])
 
     try:
-        logger.info("User %s (%s) is sending a Chat API request...", user.first_name, user.id)
-        response = await openai_api.chat_completion(user_data["messages"])
+        logger.info(
+            "User %s (%s) is sending a Chat API request...", user.first_name, user.id
+        )
+        response = await openai_api.chat_completion(
+            user_data["messages"], **user_data["settings"]
+        )
     except RuntimeError as err:
         logger.error("An error occurred with Chat API", exc_info=err)
-        await update.message.reply_text("I'm sorry, but something went wrong. Please, try again with the /ask command.")
+        await update.message.reply_text(
+            "I'm sorry, but something went wrong. Please, try again with the /ask command."
+        )
         return ConversationHandler.END
     else:
         logger.info("Response OK, no errors, replying back to the user...")
         reply = response["choices"][0]["message"]["content"]
         # Store the assistant's reply in user's message history
         user_data["messages"].append({"role": "assistant", "content": reply})
-        await update.message.reply_text(escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(
+            escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2
+        )
 
     return QUESTION
 
@@ -223,7 +297,9 @@ async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("User %s (%s) ended the conversation.", user.first_name, user.id)
 
-    await update.message.reply_text(f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask.")
+    await update.message.reply_text(
+        f"Bye, {user.first_name}! Feel free to open a new chat anytime with /ask."
+    )
 
     return ConversationHandler.END
 
@@ -236,7 +312,7 @@ async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("Admin functions should be accessed via a private chat only")
         await update.message.reply_text(
             "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
@@ -252,11 +328,11 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info(
             "User %s (%s) attempted authorization in a group: it should be done in a private chat only",
             user.first_name,
-            user.id
+            user.id,
         )
         await update.message.reply_text(
             "This command can only be run in a *private* chat\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return ConversationHandler.END
 
@@ -273,7 +349,9 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if user.id in ctx.bot_data["banned_users"]:
         logger.info("User %s (%s) is banned", user.first_name, user.id)
 
-        await update.message.reply_text("I'm sorry, but you have been banned. Contact the admin to un-ban you.")
+        await update.message.reply_text(
+            "I'm sorry, but you have been banned. Contact the admin to un-ban you."
+        )
 
         return ConversationHandler.END
     elif user.id in ctx.bot_data["authorized_users"]:
@@ -287,7 +365,6 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             logger.info("Resetting user %s auth attempts", user.id)
             ctx.user_data["auth_attempts"] = 3
 
-        # FIXME: this might be useless
         if "verify" not in (user_data := ctx.user_data):
             user_data["verify"] = None
 
@@ -297,7 +374,7 @@ async def authorize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(
             "Okay\. Answer the following question to verify that you know my creator: "
             f"_{user_data['verify']['question']}_",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
 
         return VERIFY
@@ -323,7 +400,11 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         ctx.user_data["auth_attempts"] -= 1
 
         if ctx.user_data["auth_attempts"] == 0:
-            logger.info("User %s (%s) has given 3 wrong answer. Banned", user.first_name, user.id)
+            logger.info(
+                "User %s (%s) has given 3 wrong answer. Banned",
+                user.first_name,
+                user.id,
+            )
             await update.message.reply_text(
                 "You gave 3 wrong answers! I'm sorry, but you are banned. Ask the admin to un-ban you."
             )
@@ -336,16 +417,190 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             "User %s (%s) gave the wrong answer. Attempts left: %s",
             user.first_name,
             user.id,
-            ctx.user_data["auth_attempts"]
+            ctx.user_data["auth_attempts"],
         )
 
         await update.message.reply_text(
             "I'm sorry, that's not the right answer ☹️\. Try again\. "
             f"You have *{ctx.user_data['auth_attempts']}* attempts left\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
 
         return VERIFY
+
+
+@auth(None)
+async def enter_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Enter user's settings"""
+    user_data = ctx.user_data
+
+    # The very first time entering /settings, we're NOT starting over by definition
+    if "start_over" not in user_data:
+        user_data["start_over"] = False
+
+    # Settings should be changed in a private chat only
+    if not user_data["start_over"] and update.message.chat.type != ChatType.PRIVATE:
+        await update.message.reply_text(
+            "To change your personal settings, chat with me in *private*\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return ConversationHandler.END
+
+    # Initialize the default settings
+    if "settings" not in user_data:
+        user_data["settings"] = {
+            "temperature": 0.8,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+            "top_p": 1.0,
+            "model": "default",
+        }
+
+    settings = user_data["settings"]
+    text = (
+            "Here are my internal settings for your conversations:\n\n"
+            + "\n".join(
+        [f" - {name}: {settings[key]}" for key, name in SETTINGS_NAMES.items()]
+    )
+            + "\n\nChoose which one you want to change or the ❓Help button to know more about these settings"
+    )
+    buttons = [
+        [InlineKeyboardButton(text="🤖 Model", callback_data="MODEL")],
+        [
+            InlineKeyboardButton(text="🌡️ Temperature", callback_data="TEMPERATURE"),
+            InlineKeyboardButton(text="🎲 Top probability", callback_data="TOP_P"),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🃏 Presence penalty", callback_data="PRESENCE_PENALTY"
+            ),
+            InlineKeyboardButton(
+                text="📊 Frequency penalty", callback_data="FREQUENCY_PENALTY"
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="❓ Help", callback_data="HELP"),
+            InlineKeyboardButton(text="🚪 Exit", callback_data="EXIT"),
+        ],
+    ]
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if user_data["start_over"]:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text=text, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(text=text, reply_markup=keyboard)
+
+    user_data["start_over"] = False
+
+    return SETTINGS
+
+
+async def help_settings(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Quick help about user's settings meaning"""
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        "Here's a quick explanation of the meaning of each setting you can tweak:\n\n"
+        "*Temperature*\n"
+        "It's a real number between 0 and 2\. The higher the temperature, the more random the output\. "
+        "The lower, the more deterministic\. Higher temperature means that less likely words will be picked, "
+        "which in turn means the model will be more _creative_\. Defaults to 1\.0\n\n"
+        "*Top P* \(probability\)\n"
+        "It's an alternative to temperature sampling\. It's a probability cutoff that defines from which subset of "
+        "the vocabulary the next token will be picked\. For example, `top_p = 0.1` means that only the tokens with "
+        "a cumulative probability greater than 90% will be actual candidates\. "
+        "The vocabulary subset is updated at **every** generation step\. "
+        "It's **not suggested** to alter both Top P and the temperature at the same time\. Defaults to 1\.0\n\n"
+        "*Presence and Frequency penalty*\n"
+        "These two are numbers between \-2\.0 and 2\.0\. Positive values penalize the insertion of new tokens based on "
+        "either their _presence_ in the text generated so far, or their _frequency_ in the text\. "
+        "Higher presence penalties will increase the likelihood of talking about new topics, while frequency penalties "
+        "reduce the likelihood of verbatim repetitions of portions of text\. Defaults are 0\.0 for both",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=InlineKeyboardMarkup.from_button(
+            InlineKeyboardButton(text="↩️ Back", callback_data="BACK")
+        ),
+    )
+
+
+async def set_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Set a user's settings value"""
+    user_data = ctx.user_data
+    current_setting = str(update.callback_query.data).lower()
+    user_data["current_setting"] = current_setting
+
+    buttons = [
+        [InlineKeyboardButton(text=model, callback_data=model)]
+        for model in openai_api.MODELS
+    ]
+    buttons.append([InlineKeyboardButton(text="↩️ Back", callback_data="BACK")])
+    keyboard = InlineKeyboardMarkup(buttons) if current_setting == "model" else None
+
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        f"Okay, enter a new *{SETTINGS_NAMES[current_setting].lower()}* value "
+        f"\(current is {escape_markdown(str(user_data['settings'][current_setting]))}\)\. "
+        "Type /cancel to stop\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=keyboard,
+    )
+
+    return STORE
+
+
+async def store_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Store a user's settings value"""
+    user_data = ctx.user_data
+
+    if query := update.callback_query:
+        user_data["settings"][user_data["current_setting"]] = query.data
+
+        await query.answer()
+        await query.edit_message_text(
+            f"The language model *{escape_markdown(query.data)}* is now the default for your conversations\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=InlineKeyboardMarkup.from_button(
+                InlineKeyboardButton(text="↩️ Back", callback_data="BACK")
+            ),
+        )
+    else:
+        new_value = float(update.message.text)
+        user_data["settings"][user_data["current_setting"]] = new_value
+
+        await update.message.reply_text(
+            f"The new *{user_data['current_setting']}* value is {escape_markdown(str(new_value))}\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=InlineKeyboardMarkup.from_button(
+                InlineKeyboardButton(text="↩️ Back", callback_data="BACK")
+            ),
+        )
+
+    del user_data["current_setting"]
+
+
+async def back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Go back to the previous menu"""
+    ctx.user_data["start_over"] = True
+    return await enter_settings(update, ctx)
+
+
+async def exit_settings(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Exit user's settings menu"""
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        "Okay, bye! You can always customize your settings with /settings."
+    )
+
+    return ConversationHandler.END
+
+
+async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle unrecognized commands"""
+    await update.message.reply_text(
+        f"I couldn't recognize your command `{update.message.text}`\. "
+        "Would you try again? Use /help if you're unsure\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
@@ -353,70 +608,99 @@ async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("User %s (%s) canceled the conversation.", user.first_name, user.id)
 
-    await update.message.reply_text("Bye! I hope we can talk again some day.")
+    await update.message.reply_text(
+        f"Bye, {user.first_name}! I hope we can talk again some day."
+    )
 
     return ConversationHandler.END
-
-
-async def fallback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle unrecognized commands"""
-    await update.message.reply_text(f"I couldn't recognize your command `{update.message.text}`\. "
-                                    "Would you try again? Use /help if you're unsure\.",
-                                    parse_mode=ParseMode.MARKDOWN_V2)
 
 
 def main() -> None:
     """Run the bot."""
     if not (TELEGRAM_BOT_TOKEN and OPENAI_API):
-        raise RuntimeError("Either Telegram Bot token or OpenAI API key are missing! Abort.")
+        raise RuntimeError(
+            "Either Telegram Bot token or OpenAI API key are missing! Abort."
+        )
 
     # Bot persistence
     memory = PicklePersistence(filepath=pathlib.Path("telegram-chatgpt.pickle"))
 
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
+    application = (
+        Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
+    )
 
     # Basic commands: /start, /help, /admin
     application.add_handlers(
         [
             CommandHandler("start", start),
             CommandHandler("help", help_command),
-            CommandHandler("admin", admin)
+            CommandHandler("admin", admin),
         ],
-        group=1
+        group=1,
     )
 
     # Authorization handler
     auth_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("auth", authorize)
-        ],
-        states={
-            VERIFY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, verify)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        entry_points=[CommandHandler("auth", authorize)],
+        states={VERIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     application.add_handler(auth_handler, group=1)
 
     # ChatGPT conversation handler
     gpt_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("ask", start_chat)
-        ],
+        entry_points=[CommandHandler("ask", start_chat)],
         states={
             QUESTION: [
-                MessageHandler(~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question)
+                MessageHandler(
+                    ~filters.COMMAND & (filters.TEXT | filters.VOICE), ask_question
+                )
             ]
         },
         fallbacks=[
             CommandHandler("done", end_chat),
             CommandHandler("stop", end_chat),
-            CommandHandler("cancel", end_chat)
-        ]
+            CommandHandler("cancel", end_chat),
+        ],
     )
     application.add_handler(gpt_handler, group=1)
+
+    # User settings handler
+    user_settings = ConversationHandler(
+        entry_points=[CommandHandler("settings", enter_settings)],
+        states={
+            SETTINGS: [
+                CallbackQueryHandler(
+                    set_value,
+                    pattern="^"
+                            + "$|^".join(
+                        [
+                            "MODEL",
+                            "TEMPERATURE",
+                            "PRESENCE_PENALTY",
+                            "FREQUENCY_PENALTY",
+                            "TOP_P",
+                        ]
+                    )
+                            + "$",
+                ),
+                CallbackQueryHandler(help_settings, pattern="^HELP$"),
+            ],
+            STORE: [
+                MessageHandler(filters.Regex(r"[\d\.]+"), store_value),
+                CallbackQueryHandler(
+                    store_value, pattern="^" + "$|^".join(openai_api.MODELS) + "$"
+                ),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(back, pattern="^BACK$"),
+            CallbackQueryHandler(exit_settings, pattern="^EXIT$"),
+        ],
+    )
+    application.add_handler(user_settings, group=1)
 
     # Fallback handler for unknown commands
     application.add_handler(MessageHandler(filters.COMMAND, fallback), group=1)
