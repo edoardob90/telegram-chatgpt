@@ -33,6 +33,7 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
+from openai.error import OpenAIError
 import openai_api
 
 # Load .env file
@@ -40,7 +41,8 @@ dotenv.load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=(os.environ.get("LOG_LEVEL") or logging.DEBUG),
 )
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,11 @@ goodbye_messages = [
     "Parting is such sweet sorrow, {user}. Fare thee well!",
     "May the odds be ever in your favor, {user}. Goodbye!",
     "So long, {user}, and thanks for all the memories!",
+    "Live long and prosper, {user}!",
+    "Take care, {user}.",
+    "Cheerio, {user}!",
+    "See you soon, {user}.",
+    "Goodnight {user}, sweet prince.",
 ]
 
 # Config
@@ -296,7 +303,7 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     user_data = ctx.user_data
 
-    # Check if the message contained audio
+    # Check if the message contained a voice message
     if audio := update.message.voice:
         # Download voice message from Telegram
         audio_file = await audio.get_file()
@@ -308,14 +315,13 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # Transcribe and translate audio
         try:
             audio_text = await openai_api.transcribe_audio(temp_mp3)
-        except RuntimeError as err:
-            logger.error("An error occurred with Whisper API", exc_info=err)
+        except OpenAIError:
             await update.message.reply_text(
-                "I'm sorry, but I had some troubles with your audio message. "
-                "Use /ask to record it once again."
+                "I'm sorry, but I couldn't understand your voice message. Please, try again."
             )
-            return ConversationHandler.END
+            raise
         else:
+            # Add the transcribed audio to the user's messages
             user_data["messages"].append(
                 {"role": "user", "content": audio_text["text"]}
             )
@@ -334,22 +340,24 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         response = await openai_api.chat_completion(
             user_data["messages"], **user_data["settings"]
         )
-    except RuntimeError as err:
-        logger.error("An error occurred with Chat API", exc_info=err)
+    except OpenAIError:
+        # Remove the last message from user's history to avoid duplicates
+        user_data["messages"].pop()
         await update.message.reply_text(
-            "I'm sorry, but something went wrong. Please, try again with the /ask command."
+            "I'm sorry, but something went wrong. Please, try again."
         )
-        return ConversationHandler.END
+        raise
     else:
         logger.info("Response OK, no errors, replying back to the user...")
-        reply = response["choices"][0]["message"]["content"]
         # Store the assistant's reply in user's message history
+        reply = response["choices"][0]["message"]["content"]
         user_data["messages"].append({"role": "assistant", "content": reply})
+
         await update.message.reply_text(
             escape_markdown(reply), parse_mode=ParseMode.MARKDOWN_V2
         )
 
-    return QUESTION
+        return QUESTION
 
 
 async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:

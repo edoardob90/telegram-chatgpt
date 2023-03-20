@@ -18,6 +18,12 @@ MODELS = [
     "gpt-3.5-turbo-0301",  # frozen snapshot, expires 1 June 2023
 ]
 
+# Logging'
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
+)
+logger = logging.getLogger(__name__)
+
 
 def set_api_key(api_key: str = None) -> None:
     """Set OpenAI API key"""
@@ -64,9 +70,7 @@ def num_tokens_from_messages(
         )
 
 
-async def chat_completion(
-        messages: List[Dict], model: str = None, **kwargs
-) -> Any:
+async def chat_completion(messages: List[Dict], model: str = None, **kwargs) -> Any:
     """Prepare and send a Chat API request"""
     if not model or model == "default":
         model = "gpt-3.5-turbo"
@@ -76,8 +80,9 @@ async def chat_completion(
             model=model, messages=messages, **kwargs
         )
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
-    except OpenAIError as err:
-        raise RuntimeError("Error while performing a chat API request") from err
+    except OpenAIError:
+        logger.error("Error while performing an Chat API requests")
+        raise
     else:
         return response
 
@@ -90,20 +95,18 @@ async def transcribe_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict
             response = await openai.Audio.atranscribe(
                 model="whisper-1", file=file, **kwargs
             )
-    except FileNotFoundError as err:
-        raise RuntimeError(f"File '{filepath.name}' cannot be found") from err
-    except OpenAIError as err:
-        raise RuntimeError(
-            "Error while performing an audio translation API request"
-        ) from err
+    except FileNotFoundError:
+        logger.error(f"File '{filepath.name}' cannot be found")
+        raise
+    except OpenAIError:
+        logger.error("Error while performing an audio translation API request")
+        raise
     else:
         return response
 
 
 async def main():
-    log = logging.getLogger(__name__)
-    log.setLevel(logging.DEBUG)
-    log.addHandler(logging.StreamHandler())
+    logger.addHandler(logging.StreamHandler())
 
     dotenv.load_dotenv()
     openai.api_key = os.environ.get("OPENAI_API")
@@ -125,5 +128,5 @@ async def main():
     print(_response["choices"][0]["message"]["content"])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
