@@ -707,6 +707,7 @@ def main() -> None:
             CommandHandler("stop", end_chat),
             CommandHandler("cancel", end_chat),
         ],
+        per_user=False
     )
     application.add_handler(gpt_handler, group=1)
 
