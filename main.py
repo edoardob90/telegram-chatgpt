@@ -46,6 +46,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Manually adjust logging level of verbose module(s)
+logging.getLogger("hpack").setLevel(logging.WARNING)
+
 # Conversation states
 (
     AUTHORIZE,
