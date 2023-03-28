@@ -33,7 +33,7 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown as _escape_markdown
 
-from openai.error import OpenAIError
+import openai.error
 import openai_api
 
 # Load .env file
@@ -318,11 +318,11 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # Transcribe and translate audio
         try:
             audio_text = await openai_api.transcribe_audio(temp_mp3)
-        except OpenAIError:
+        except openai.error.OpenAIError as err:
             await update.message.reply_text(
                 "I'm sorry, but I couldn't understand your voice message. Please, try again."
             )
-            raise
+            raise err
         else:
             # Add the transcribed audio to the user's messages
             user_data["messages"].append(
@@ -343,13 +343,27 @@ async def ask_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         response = await openai_api.chat_completion(
             user_data["messages"], **user_data["settings"]
         )
-    except OpenAIError:
+    except openai.error.OpenAIError as error:
         # Remove the last message from user's history to avoid duplicates
         user_data["messages"].pop()
-        await update.message.reply_text(
-            "I'm sorry, but something went wrong. Please, try again."
-        )
-        raise
+
+        if isinstance(error, openai.error.RateLimitError):
+            await update.message.reply_text(
+                "Whoa! Your request have been rate-limited. Either you reached the monthly billing limit or "
+                "you sent too many requests. Please, slow down a bit.\n"
+                "Feel free to start a new chat with /ask."
+            )
+            if ADMIN_USER_ID is not None:
+                ctx.bot.send_message(
+                    chat_id=ADMIN_USER_ID,
+                    text=f"User '{user.first_name}' ({user.id}) has been rate-limited. Check your OpenAI API usage."
+                )
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                "I'm sorry, but something went wrong. Please, try again."
+            )
+            raise error
     else:
         logger.info("Response OK, no errors, replying back to the user...")
         # Store the assistant's reply in user's message history
@@ -379,6 +393,7 @@ async def end_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
 @auth(ADMIN_USER_ID)
 async def admin(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command"""
+    # TODO: to implement
     await update.message.reply_text("Hello, admin!")
 
 
