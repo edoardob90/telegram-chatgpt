@@ -15,7 +15,9 @@ from pydub import AudioSegment
 
 MODELS = [
     "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0301",  # frozen snapshot, expires 1 June 2023
+    "gpt-3.5-turbo-0301",  # Snapshot of gpt-3.5-turbo from March 1st 2023. Expires June 1st 2023
+    "gpt-4",
+    "gpt-4-0314",  # Snapshot of gpt-4 from March 14th 2023. Expires June 14th 2023
 ]
 
 # Logging'
@@ -52,7 +54,7 @@ def num_tokens_from_messages(
     except KeyError:
         encoding = tiktoken.get_encoding("cl100k_base")
 
-    if model == "gpt-3.5-turbo-0301":  # note: future models may deviate from this
+    if model.startswith("gpt-3.5"):  # note: future models may deviate from this
         num_tokens = 0
         for message in messages:
             num_tokens += (
@@ -81,7 +83,7 @@ async def chat_completion(messages: List[Dict], model: str = None, **kwargs) -> 
         )
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError:
-        logger.error("Error while performing an Chat API requests")
+        logger.error("Error while performing a Chat API request")
         raise
     else:
         return response
