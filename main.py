@@ -35,6 +35,7 @@ from telegram.helpers import escape_markdown as _escape_markdown
 
 import openai.error
 import openai_api
+import utils
 
 # Load .env file
 dotenv.load_dotenv()
@@ -95,15 +96,24 @@ OPENAI_API = os.environ.get("OPENAI_API")
 ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID"))
 
 # Load the question/answer file for user verification
+verify_file = pathlib.Path(".verify.json")
+verify_file_hashed = verify_file.parent / f"{verify_file.stem}.sha256.json"
 try:
-    AUTH_QUESTIONS = json.load(
-        pathlib.Path(".verify.json").open(mode="r", encoding="utf-8")
-    )
+    with verify_file_hashed.open(mode="r", encoding="utf-8") as verify_json:
+        AUTH_QUESTIONS = json.load(verify_json)
 except FileNotFoundError:
-    logger.error(
-        "The file '.verify.json' containing users' verification questions does not exists."
-    )
-    raise
+    if not verify_file.exists():
+        raise FileNotFoundError("Either a '.verify.json' or '.verify.hashed.json' must exist. None found.")
+
+    with verify_file_hashed.open(mode="w", encoding="utf-8") as verify_hashed:
+        AUTH_QUESTIONS = [
+            {k: utils.hash_data(v) if k == "answer" else v for k, v in q_a.items()}
+            for q_a in json.load(verify_file.open(mode="r", encoding="utf-8"))
+        ]
+        json.dump(AUTH_QUESTIONS, verify_hashed, ensure_ascii=True, indent=2)
+
+    # Remove '.verify.json'
+    verify_file.unlink(missing_ok=True)
 
 # Set OpenAI API key
 openai_api.set_api_key(OPENAI_API)
@@ -452,7 +462,7 @@ async def verify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     banned_users: Set = ctx.bot_data["banned_users"]
     user = update.message.from_user
 
-    if update.message.text.lower() == ctx.user_data["verify"]["answer"]:
+    if utils.hash_data(update.message.text.lower()) == ctx.user_data["verify"]["answer"]:
         logger.info("User %s (%s) is now authorized", user.first_name, user.id)
 
         await update.message.reply_text("That's correct 🎉! You have been authorized.")
