@@ -8,9 +8,9 @@ packages = [{include = "telegram_chatgpt"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-python-telegram-bot = "^20.1"
+python-telegram-bot = "^20.2"
 python-dotenv = "^1.0.0"
-tiktoken = "^0.2.0"
+tiktoken = "^0.3.3"
 openai = "^0.27.2"
 pydub = "^0.25.1"
 
