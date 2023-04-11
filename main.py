@@ -694,7 +694,7 @@ def main() -> None:
     # Bot persistence
     memory = PicklePersistence(filepath=pathlib.Path("telegram-chatgpt.pickle"))
 
-    # Create the Application and pass it your bot's token.
+    # Create the Application and pass it your bot token.
     application = (
         Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(memory).build()
     )
@@ -744,15 +744,13 @@ def main() -> None:
                 CallbackQueryHandler(
                     set_value,
                     pattern="^"
-                            + "$|^".join(
-                        [
-                            "MODEL",
-                            "TEMPERATURE",
-                            "PRESENCE_PENALTY",
-                            "FREQUENCY_PENALTY",
-                            "TOP_P",
-                        ]
-                    )
+                            + "$|^".join([
+                        "MODEL",
+                        "TEMPERATURE",
+                        "PRESENCE_PENALTY",
+                        "FREQUENCY_PENALTY",
+                        "TOP_P",
+                    ])
                             + "$",
                 ),
                 CallbackQueryHandler(help_settings, pattern="^HELP$"),
@@ -760,7 +758,7 @@ def main() -> None:
             STORE: [
                 MessageHandler(filters.Regex(r"[\d\.]+"), store_value),
                 CallbackQueryHandler(
-                    store_value, pattern="^" + "$|^".join(openai_api.MODELS) + "$"
+                    store_value, pattern="^" + "$|^".join(model for model in openai_api.MODELS) + "$"
                 ),
             ],
         },

@@ -3,6 +3,7 @@ OpenAI utils
 """
 import os
 from typing import List, Dict, Union, Any
+from collections import namedtuple, deque
 import pathlib
 import logging
 import asyncio
@@ -13,12 +14,20 @@ import tiktoken
 import dotenv
 from pydub import AudioSegment
 
-MODELS = [
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0301",  # Snapshot of gpt-3.5-turbo from March 1st 2023. Expires June 1st 2023
-    "gpt-4",
-    "gpt-4-0314",  # Snapshot of gpt-4 from March 14th 2023. Expires June 14th 2023
-]
+OpenAIModel = namedtuple("OpenAIModel", ["id", "max_tokens", "variants"], defaults=(None,))
+
+MODELS = {
+    "GPT-3.5": OpenAIModel(
+        "gpt-3.5-turbo",
+        4000,
+        ("gpt-3.5-turbo-0301",),  # Snapshot of gpt-3.5-turbo from March 1st 2023. Expires June 1st 2023
+    ),
+    "GPT-4": OpenAIModel(
+        "gpt-4",
+        8000,
+        ("gpt-4-0314",),  # Snapshot of gpt-4 from March 14th 2023. Expires June 14th 2023
+    )
+}
 
 # Logging'
 logging.basicConfig(
@@ -42,44 +51,52 @@ def num_tokens_from_string(string: str, model: str = "gpt-3.5-turbo-0301") -> in
     return len(encoding.encode(string))
 
 
-def num_tokens_from_messages(
-        messages: List[Dict], model: str = "gpt-3.5-turbo-0301"
-) -> Union[int, None]:
-    """
-    Returns the number of tokens used by a list of messages.
-    More at: https://platform.openai.com/docs/guides/chat/introduction
-    """
-    try:
-        encoding = tiktoken.encoding_for_model(model)
-    except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
-
-    if model.startswith("gpt-3.5"):  # note: future models may deviate from this
-        num_tokens = 0
-        for message in messages:
-            num_tokens += (
-                4  # every message follows{ <im_start>role/name}\n{content}<im_end>\n
-            )
-            for key, value in message.items():
-                num_tokens += len(encoding.encode(value))
-                if key == "name":  # if there's a name, the role is omitted
-                    num_tokens += -1  # role is always required and always 1 token
-        num_tokens += 2  # every reply is primed with <im_start>assistant
-        return num_tokens
+def build_messages_to_send(messages: List[Dict], model: OpenAIModel) -> List[Dict]:
+    """Collect the messages to send to the API, handling the model's tokens limit"""
+    if model.id == "gpt-3.5-turbo":
+        tokens_per_message = 4
+        tokens_per_name = -1
+    elif model.id == "gpt-4":
+        tokens_per_message = 3
+        tokens_per_name = 1
     else:
-        raise NotImplementedError(
-            f"num_tokens_from_messages() is not presently implemented for model {model}."
-        )
+        msg = "Unknown model, cannot estimate the number of tokens. Did you spell the model's name right?"
+        logger.error(msg)
+        raise NotImplementedError(msg)
+
+    tokens_count = 0
+    messages_to_send = deque()
+
+    # Count the tokens in the message history
+    for message in reversed(messages):
+        tokens_count += tokens_per_message
+        for key, value in message.items():
+            tokens_count += num_tokens_from_string(value, model.id)
+            if key == "name":
+                tokens_count += tokens_per_name
+
+        # Check if we have filled the model's context plus a buffer
+        # The buffer is models max tokens / 2
+        if (tokens_count + model.max_tokens // 2) > model.max_tokens:
+            break
+
+        messages_to_send.appendleft(message)
+
+    return list(messages_to_send)
 
 
 async def chat_completion(messages: List[Dict], model: str = None, **kwargs) -> Any:
     """Prepare and send a Chat API request"""
-    if not model or model == "default":
-        model = "gpt-3.5-turbo"
+    try:
+        openai_model = MODELS[model]
+    except KeyError:
+        openai_model = MODELS["GPT-3.5"]
+
+    messages_to_send = build_messages_to_send(messages, openai_model)
 
     try:
         response = await openai.ChatCompletion.acreate(
-            model=model, messages=messages, **kwargs
+            model=openai_model.id, messages=messages_to_send, **kwargs
         )
     # TODO: be more specific with the exception type (e.g., rate-limit has been reached)
     except OpenAIError:
@@ -107,7 +124,7 @@ async def transcribe_audio(filepath: Union[str, pathlib.Path], **kwargs) -> Dict
         return response
 
 
-async def main():
+async def _main():
     logger.addHandler(logging.StreamHandler())
 
     dotenv.load_dotenv()
@@ -131,4 +148,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_main())
