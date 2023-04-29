@@ -18,3 +18,5 @@ Personal assistant powered by ChatGPT as a Telegram bot. Uses the official [Open
 ```
 
 - The bot can be started with a simple command like `poetry run python main.py`
+
+Check out the [official wiki](https://github.com/python-telegram-bot/python-telegram-bot/wiki/Hosting-your-bot) of the [python-telegram-bot library](https://python-telegram-bot.org/) to know how and where to host this bot.
