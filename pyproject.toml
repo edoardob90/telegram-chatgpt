@@ -4,7 +4,6 @@ version = "0.1.0"
 description = ""
 authors = ["edoardob90 <edoardob90@gmail.com>"]
 readme = "README.md"
-packages = [{include = "telegram_chatgpt"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
