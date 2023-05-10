@@ -620,13 +620,14 @@ async def set_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def store_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Store a user's settings value"""
     user_data = ctx.user_data
+    current_setting = user_data['current_setting']
 
     if query := update.callback_query:
-        user_data["settings"][user_data["current_setting"]] = query.data
+        user_data["settings"][current_setting] = query.data
 
         await query.answer()
         await query.edit_message_text(
-            f"The language model *{escape_markdown(query.data)}* is now the default for your conversations\.",
+            f"*{escape_markdown(query.data)}* is now the default language model for your conversations\.",
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=InlineKeyboardMarkup.from_button(
                 InlineKeyboardButton(text="↩️ Back", callback_data="BACK")
@@ -634,10 +635,10 @@ async def store_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         new_value = float(update.message.text)
-        user_data["settings"][user_data["current_setting"]] = new_value
+        user_data["settings"][current_setting] = new_value
 
         await update.message.reply_text(
-            f"The new *{user_data['current_setting']}* value is {escape_markdown(str(new_value))}\.",
+            f"The new *{SETTINGS_NAMES[current_setting].lower()}* value is {escape_markdown(str(new_value))}\.",
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=InlineKeyboardMarkup.from_button(
                 InlineKeyboardButton(text="↩️ Back", callback_data="BACK")
